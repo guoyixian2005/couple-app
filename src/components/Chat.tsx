@@ -1,77 +1,83 @@
 'use client';
 
 // 聊天组件 - 实现情侣之间的实时消息功能
-// 这个组件包含消息列表、发送框、实时更新等功能
+// 使用 WebSocket 实时通信
 
 import { useState, useEffect, useRef } from 'react';
-import {
-  collection,
-  addDoc,
-  query,
-  orderBy,
-  onSnapshot,
-  serverTimestamp,
-  doc,
-  updateDoc
-} from 'firebase/firestore';
-import { db } from '@/lib/firebase';
-import { Message } from '@/types';
+import { api, wsClient } from '@/lib/api';
 
 interface ChatProps {
-  currentUserId: string;      // 当前用户ID
-  partnerId: string;          // 伴侣ID
-  currentUserName: string;     // 当前用户名称
+  currentUserId: string;
+  partnerId: string;
+  currentUserName: string;
 }
 
 export default function Chat({ currentUserId, partnerId, currentUserName }: ChatProps) {
-  // 状态管理
-  const [messages, setMessages] = useState<Message[]>([]);    // 消息列表
-  const [newMessage, setNewMessage] = useState('');           // 新消息内容
-  const [loading, setLoading] = useState(true);              // 加载状态
-  const messagesEndRef = useRef<HTMLDivElement>(null);       // 消息列表底部引用
+  const [messages, setMessages] = useState<any[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 自动滚动到底部
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // 监听消息变化 - 实现实时更新
+  // 加载初始消息
   useEffect(() => {
+    loadMessages();
+    setupWebSocket();
+  }, [currentUserId, partnerId]);
+
+  // 加载消息
+  const loadMessages = async () => {
     setLoading(true);
-
-    // 创建消息查询（按时间排序）
-    const messagesQuery = query(
-      collection(db, 'conversations', `${currentUserId}_${partnerId}`, 'messages'),
-      orderBy('timestamp', 'asc')
-    );
-
-    // 实时监听消息变化
-    const unsubscribe = onSnapshot(messagesQuery, (snapshot) => {
-      const loadedMessages: Message[] = [];
-
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        loadedMessages.push({
-          id: doc.id,
-          content: data.content,
-          senderId: data.senderId,
-          receiverId: data.receiverId,
-          timestamp: data.timestamp?.toDate() || new Date(),
-          read: data.read || false,
-        } as Message);
-      });
+    try {
+      const data = await api.getMessages(currentUserId, partnerId);
+      const loadedMessages = data.map((msg: any) => ({
+        id: msg.id,
+        content: msg.content,
+        senderId: msg.sender_id,
+        receiverId: msg.receiver_id,
+        timestamp: new Date(msg.created_at),
+        read: msg.read === 1,
+      }));
 
       setMessages(loadedMessages);
       setLoading(false);
-      scrollToBottom();
-    }, (error) => {
-      console.error('监听消息失败:', error);
+      setTimeout(scrollToBottom, 100);
+    } catch (error) {
+      console.error('加载消息失败:', error);
       setLoading(false);
-    });
+    }
+  };
 
-    // 清理函数：组件卸载时取消监听
-    return () => unsubscribe();
-  }, [currentUserId, partnerId]);
+  // 设置 WebSocket 实时监听
+  const setupWebSocket = () => {
+    wsClient.connect(currentUserId);
+
+    wsClient.onMessage((data) => {
+      console.log('收到实时消息:', data);
+
+      if (data.type === 'new_message') {
+        const message = data.message;
+        if ((message.senderId === currentUserId && message.receiverId === partnerId) ||
+            (message.senderId === partnerId && message.receiverId === currentUserId)) {
+
+          const newMsg = {
+            id: message.id,
+            content: message.content,
+            senderId: message.senderId,
+            receiverId: message.receiverId,
+            timestamp: new Date(message.createdAt),
+            read: message.read,
+          };
+
+          setMessages((prev) => [...prev, newMsg]);
+          setTimeout(scrollToBottom, 100);
+        }
+      }
+    });
+  };
 
   // 每次消息更新后自动滚动到底部
   useEffect(() => {
@@ -80,24 +86,11 @@ export default function Chat({ currentUserId, partnerId, currentUserName }: Chat
 
   // 发送消息函数
   const handleSendMessage = async () => {
-    if (!newMessage.trim()) return;  // 空消息不发送
+    if (!newMessage.trim()) return;
 
     try {
-      // 添加新消息到数据库
-      await addDoc(
-        collection(db, 'conversations', `${currentUserId}_${partnerId}`, 'messages'),
-        {
-          content: newMessage.trim(),
-          senderId: currentUserId,
-          receiverId: partnerId,
-          timestamp: serverTimestamp(),  // 使用服务器时间
-          read: false,
-        }
-      );
-
-      setNewMessage('');  // 清空输入框
-
-      // TODO: 这里可以添加发送通知功能
+      await api.sendMessage(currentUserId, partnerId, newMessage.trim());
+      setNewMessage('');
     } catch (error) {
       console.error('发送消息失败:', error);
       alert('发送失败，请重试');
@@ -107,14 +100,12 @@ export default function Chat({ currentUserId, partnerId, currentUserName }: Chat
   // 标记消息为已读
   const markAsRead = async (messageId: string) => {
     try {
-      const messageRef = doc(
-        db,
-        'conversations',
-        `${currentUserId}_${partnerId}`,
-        'messages',
-        messageId
+      await api.markMessageAsRead(messageId);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === messageId ? { ...msg, read: true } : msg
+        )
       );
-      await updateDoc(messageRef, { read: true });
     } catch (error) {
       console.error('标记已读失败:', error);
     }

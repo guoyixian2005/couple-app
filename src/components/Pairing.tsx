@@ -1,19 +1,11 @@
 'use client';
 
 // 用户配对组件 - 实现情侣之间的配对功能
-// 用户通过输入伴侣的邮箱来建立连接
+// 使用自建后端 API
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  collection,
-  addDoc,
-  query,
-  where,
-  getDocs,
-  serverTimestamp
-} from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { api } from '@/lib/api';
 
 export default function Pairing({ currentUserId, userEmail }: { currentUserId: string; userEmail: string }) {
   const [partnerEmail, setPartnerEmail] = useState('');
@@ -36,66 +28,14 @@ export default function Pairing({ currentUserId, userEmail }: { currentUserId: s
     setError('');
 
     try {
-      // 检查是否已经向该邮箱发送过配对请求
-      const existingRequestsQuery = query(
-        collection(db, 'pairRequests'),
-        where('requesterId', '==', currentUserId),
-        where('targetEmail', '==', partnerEmail.trim())
-      );
-
-      const existingRequests = await getDocs(existingRequestsQuery);
-
-      if (!existingRequests.empty) {
-        const request = existingRequests.docs[0].data();
-        if (request.status === 'accepted') {
-          setError('你们已经是情侣了~');
-        } else if (request.status === 'pending') {
-          setError('配对请求待处理中，请耐心等待');
-        }
-        setLoading(false);
-        return;
-      }
-
-      // 检查目标用户是否存在
-      const usersQuery = query(
-        collection(db, 'users'),
-        where('email', '==', partnerEmail.trim())
-      );
-
-      const userSnapshot = await getDocs(usersQuery);
-
-      if (userSnapshot.empty) {
-        setError('该邮箱尚未注册，请先让您的伴侣注册账号');
-        setLoading(false);
-        return;
-      }
-
-      const targetUser = userSnapshot.docs[0];
-
-      // 检查对方是否已经和其他人配对
-      if (targetUser.data().partnerId) {
-        setError('该用户已经配对了，请确认邮箱是否正确');
-        setLoading(false);
-        return;
-      }
-
-      // 创建配对请求
-      await addDoc(collection(db, 'pairRequests'), {
-        requesterId: currentUserId,
-        requesterEmail: userEmail,
-        targetEmail: partnerEmail.trim(),
-        status: 'pending',
-        createdAt: serverTimestamp(),
-      });
-
+      await api.sendPairRequest(currentUserId, userEmail, partnerEmail.trim());
       alert('配对请求已发送！请通知您的伴侣查看并接受请求');
       setPartnerEmail('');
       setLoading(false);
 
-      // TODO: 这里可以添加发送邮件通知功能
-    } catch (error) {
+    } catch (error: any) {
       console.error('发送配对请求失败:', error);
-      setError('发送失败，请重试');
+      setError(error.message || '发送失败，请重试');
       setLoading(false);
     }
   };

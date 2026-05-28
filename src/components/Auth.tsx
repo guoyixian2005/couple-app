@@ -1,21 +1,11 @@
 'use client';
 
 // 认证组件 - 处理用户登录和注册
-// 简化版本：使用邮箱作为主要标识
+// 使用自建后端 API
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  addDoc,
-  serverTimestamp,
-  doc,
-  updateDoc
-} from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { api } from '@/lib/api';
 
 export default function Auth() {
   const [email, setEmail] = useState('');
@@ -23,11 +13,17 @@ export default function Auth() {
   const [error, setError] = useState('');
   const [isLogin, setIsLogin] = useState(true);
   const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
   const router = useRouter();
 
   const handleAuth = async () => {
     if (!email.trim()) {
       setError('请输入邮箱');
+      return;
+    }
+
+    if (!password.trim()) {
+      setError('请输入密码');
       return;
     }
 
@@ -40,60 +36,36 @@ export default function Auth() {
     setError('');
 
     try {
-      // 检查用户是否存在
-      const usersQuery = query(
-        collection(db, 'users'),
-        where('email', '==', email.trim())
-      );
-
-      const userSnapshot = await getDocs(usersQuery);
-
       if (isLogin) {
         // 登录模式
-        if (userSnapshot.empty) {
-          setError('该邮箱尚未注册，请先注册');
-          setLoading(false);
-          return;
-        }
+        const response = await api.login(email.trim(), password);
 
-        const user = userSnapshot.docs[0];
-        const userId = user.id;
-
-        // 保存用户信息到 localStorage（简化版认证）
-        localStorage.setItem('userId', userId);
-        localStorage.setItem('userEmail', email);
-        localStorage.setItem('userName', user.data().displayName);
+        // 保存用户信息到 localStorage
+        localStorage.setItem('userId', response.user.id);
+        localStorage.setItem('userEmail', response.user.email);
+        localStorage.setItem('userName', response.user.displayName);
+        localStorage.setItem('partnerId', response.user.partnerId || '');
 
         alert('登录成功！');
         router.refresh();
       } else {
         // 注册模式
-        if (!userSnapshot.empty) {
-          setError('该邮箱已注册，请直接登录');
-          setLoading(false);
-          return;
-        }
-
-        // 创建新用户
-        const userRef = await addDoc(collection(db, 'users'), {
-          email: email.trim(),
-          displayName: displayName.trim(),
-          createdAt: serverTimestamp(),
-        });
+        const response = await api.register(email.trim(), password, displayName.trim());
 
         // 保存用户信息到 localStorage
-        localStorage.setItem('userId', userRef.id);
-        localStorage.setItem('userEmail', email);
-        localStorage.setItem('userName', displayName);
+        localStorage.setItem('userId', response.user.id);
+        localStorage.setItem('userEmail', response.user.email);
+        localStorage.setItem('userName', response.user.displayName);
+        localStorage.setItem('partnerId', '');
 
         alert('注册成功！');
         router.refresh();
       }
 
       setLoading(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error('认证失败:', error);
-      setError('操作失败，请重试');
+      setError(error.message || '操作失败，请重试');
       setLoading(false);
     }
   };
@@ -135,8 +107,21 @@ export default function Auth() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleAuth()}
               placeholder="your@email.com"
+              className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              密码
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleAuth()}
+              placeholder="设置密码"
               className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 dark:bg-gray-700 dark:text-white"
             />
           </div>

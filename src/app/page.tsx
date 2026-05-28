@@ -1,19 +1,11 @@
 'use client';
 
 // 主页面 - 根据用户状态显示不同组件
-// 这是应用的入口点，处理整个用户流程：认证 → 配对请求 → 配对/等待配对 → 聊天
+// 使用自建后端 API
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  doc,
-  getDoc,
-  onSnapshot,
-  collection,
-  query,
-  where
-} from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { api, wsClient } from '@/lib/api';
 import Auth from '@/components/Auth';
 import PairRequests from '@/components/PairRequests';
 import Pairing from '@/components/Pairing';
@@ -33,51 +25,36 @@ export default function Home() {
     const userId = localStorage.getItem('userId');
     const email = localStorage.getItem('userEmail');
     const name = localStorage.getItem('userName');
+    const partner = localStorage.getItem('partnerId');
 
     if (userId && email) {
       setCurrentUserId(userId);
       setUserEmail(email);
       setUserName(name || '');
-
-      // 监听用户的 partnerId 变化
-      const userRef = doc(db, 'users', userId);
-      const unsubscribeUser = onSnapshot(userRef, (doc) => {
-        if (doc.exists()) {
-          const data = doc.data();
-          setPartnerId(data.partnerId || null);
-        }
-      });
+      setPartnerId(partner || null);
 
       // 检查是否有待处理的配对请求
-      const requestsQuery = query(
-        collection(db, 'pairRequests'),
-        where('targetEmail', '==', email)
-      );
-
-      const unsubscribeRequests = onSnapshot(requestsQuery, (snapshot) => {
-        let hasPending = false;
-        snapshot.forEach((doc) => {
-          if (doc.data().status === 'pending') {
-            hasPending = true;
-          }
-        });
-        setHasPendingRequests(hasPending);
-      });
-
+      checkPendingRequests(email);
       setLoading(false);
-
-      return () => {
-        unsubscribeUser();
-        unsubscribeRequests();
-      };
     } else {
       setLoading(false);
     }
   }, []);
 
+  // 检查待处理配对请求
+  const checkPendingRequests = async (email: string) => {
+    try {
+      const data = await api.getPairRequests(email);
+      setHasPendingRequests(data.length > 0);
+    } catch (error) {
+      console.error('检查配对请求失败:', error);
+    }
+  };
+
   // 登出函数
   const handleLogout = () => {
     localStorage.clear();
+    wsClient.disconnect();
     router.reload();
   };
 

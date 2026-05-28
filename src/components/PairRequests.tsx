@@ -1,29 +1,11 @@
 'use client';
 
 // 配对请求管理组件 - 查看和处理收到的配对请求
-// 用户可以接受或拒绝收到的配对请求
+// 使用自建后端 API + WebSocket 实时更新
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
-  updateDoc,
-  doc,
-  getDoc
-} from 'firebase/firestore';
-import { db } from '@/lib/firebase';
-
-interface RequestData {
-  id: string;
-  requesterId: string;
-  requesterEmail: string;
-  targetEmail: string;
-  status: 'pending' | 'accepted' | 'rejected';
-  createdAt: any;
-}
+import { api, wsClient } from '@/lib/api';
 
 export default function PairRequests({
   currentUserId,
@@ -32,79 +14,67 @@ export default function PairRequests({
   currentUserId: string;
   userEmail: string;
 }) {
-  const [requests, setRequests] = useState<RequestData[]>([]);
+  const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  // 监听配对请求变化
+  // 加载配对请求
   useEffect(() => {
-    const q = query(
-      collection(db, 'pairRequests'),
-      where('targetEmail', '==', userEmail)
-    );
+    loadRequests();
+    setupWebSocket();
+  }, [userEmail]);
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const loadedRequests: RequestData[] = [];
-
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.status === 'pending') {
-          loadedRequests.push({
-            id: doc.id,
-            requesterId: data.requesterId,
-            requesterEmail: data.requesterEmail,
-            targetEmail: data.targetEmail,
-            status: data.status,
-            createdAt: data.createdAt,
-          } as RequestData);
-        }
-      });
+  const loadRequests = async () => {
+    try {
+      const data = await api.getPairRequests(userEmail);
+      const loadedRequests = data.map((req: any) => ({
+        id: req.id,
+        requesterId: req.requester_id,
+        requesterEmail: req.requester_email,
+        targetEmail: req.target_email,
+        status: req.status,
+        createdAt: new Date(req.created_at),
+      }));
 
       setRequests(loadedRequests);
       setLoading(false);
-    }, (error) => {
-      console.error('监听配对请求失败:', error);
+    } catch (error) {
+      console.error('加载配对请求失败:', error);
       setLoading(false);
-    });
+    }
+  };
 
-    return () => unsubscribe();
-  }, [userEmail]);
+  // 设置 WebSocket 实时监听
+  const setupWebSocket = () => {
+    wsClient.connect(currentUserId);
+
+    wsClient.onMessage((data) => {
+      if (data.type === 'new_pair_request') {
+        const newRequest = {
+          id: data.requestId,
+          requesterId: currentUserId,
+          requesterEmail: data.requesterEmail,
+          targetEmail: userEmail,
+          status: 'pending',
+          createdAt: new Date(),
+        };
+
+        setRequests((prev) => [...prev, newRequest]);
+      } else if (data.type === 'pair_accepted') {
+        // 配对成功，刷新页面
+        alert('配对成功！即将跳转到聊天页面...');
+        setTimeout(() => {
+          router.refresh();
+        }, 1500);
+      }
+    });
+  };
 
   // 接受配对请求
-  const handleAccept = async (requestId: string, requesterId: string) => {
+  const handleAccept = async (requestId: string) => {
     try {
-      // 获取请求者的信息
-      const requesterRef = doc(db, 'users', requesterId);
-      const requesterSnap = await getDoc(requesterRef);
-
-      if (!requesterSnap.exists()) {
-        alert('请求者不存在，请重试');
-        return;
-      }
-
-      const currentUserRef = doc(db, 'users', currentUserId);
-      const requestRef = doc(db, 'pairRequests', requestId);
-
-      // 更新用户的 partnerId
-      await updateDoc(currentUserRef, {
-        partnerId: requesterId
-      });
-
-      await updateDoc(requesterRef, {
-        partnerId: currentUserId
-      });
-
-      // 更新请求状态
-      await updateDoc(requestRef, {
-        status: 'accepted'
-      });
-
-      alert('配对成功！即将跳转到聊天页面...');
-      setTimeout(() => {
-        router.refresh();
-      }, 1500);
-
-    } catch (error) {
+      await api.acceptPairRequest(requestId, currentUserId, userEmail);
+    } catch (error: any) {
       console.error('接受配对请求失败:', error);
       alert('操作失败，请重试');
     }
@@ -113,13 +83,12 @@ export default function PairRequests({
   // 拒绝配对请求
   const handleReject = async (requestId: string) => {
     try {
-      const requestRef = doc(db, 'pairRequests', requestId);
-      await updateDoc(requestRef, {
-        status: 'rejected'
-      });
+      await api.rejectPairRequest(requestId);
 
+      // 从列表中移除
+      setRequests((prev) => prev.filter((r) => r.id !== requestId));
       alert('已拒绝该配对请求');
-    } catch (error) {
+    } catch (error: any) {
       console.error('拒绝配对请求失败:', error);
       alert('操作失败，请重试');
     }
@@ -175,13 +144,13 @@ export default function PairRequests({
                     </div>
                   </div>
                   <p className="text-sm text-gray-500 dark:text-gray-400">
-                    请求时间：{request.createdAt?.toDate()?.toLocaleString()}
+                    请求时间：{request.createdAt.toLocaleString()}
                   </p>
                 </div>
 
                 <div className="flex gap-2">
                   <button
-                    onClick={() => handleAccept(request.id, request.requesterId)}
+                    onClick={() => handleAccept(request.id)}
                     className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg hover:from-green-600 hover:to-emerald-600 transition-all duration-300 transform hover:scale-105"
                   >
                     接受
