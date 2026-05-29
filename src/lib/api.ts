@@ -1,7 +1,7 @@
 // API 客户端
 // 与自建后端服务器通信
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE_URL = 'http://47.108.180.179:3001';
 
 class ApiClient {
   private baseUrl: string;
