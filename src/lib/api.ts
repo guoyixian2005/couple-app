@@ -112,7 +112,9 @@ export class WebSocketClient {
     this.userId = userId;
 
     try {
-      this.ws = new WebSocket(`ws://localhost:3001?userId=${userId}`);
+      // 连接到服务器WebSocket，支持跨设备访问
+      const wsUrl = 'ws://47.108.180.179:3001?userId=' + userId;
+      this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         console.log('WebSocket 连接成功');

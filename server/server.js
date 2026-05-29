@@ -1,11 +1,9 @@
-// 主服务器文件
-// 包含 Express API 和 WebSocket 实时通信
-
+// 主服务器文件 - 使用 LowDB
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
-const { db, initDatabase, generateId } = require('./database');
+const { db, initDatabase } = require('./database');
 
 const app = express();
 const server = http.createServer(app);
@@ -24,7 +22,8 @@ const clients = new Map(); // userId -> ws
 
 // WebSocket 连接处理
 wss.on('connection', (ws, req) => {
-  const userId = req.url.split('?userId=')[1];
+  const urlParams = new URLSearchParams(req.url.split('?')[1]);
+  const userId = urlParams.get('userId');
 
   if (userId) {
     clients.set(userId, ws);
@@ -66,19 +65,21 @@ app.post('/api/auth/register', (req, res) => {
     }
 
     // 检查邮箱是否已存在
-    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existingUser = db.get('users').find({ email }).value();
     if (existingUser) {
       return res.status(400).json({ error: '该邮箱已被注册' });
     }
 
     // 创建新用户
     const userId = generateId();
-    const stmt = db.prepare(`
-      INSERT INTO users (id, email, password, display_name)
-      VALUES (?, ?, ?, ?)
-    `);
-
-    stmt.run(userId, email, password, displayName);
+    db.get('users').push({
+      id: userId,
+      email,
+      password,
+      displayName,
+      partnerId: null,
+      createdAt: new Date().toISOString()
+    }).write();
 
     res.json({
       success: true,
@@ -104,7 +105,7 @@ app.post('/api/auth/login', (req, res) => {
     }
 
     // 查找用户
-    const user = db.prepare('SELECT * FROM users WHERE email = ? AND password = ?').get(email, password);
+    const user = db.get('users').find({ email, password }).value();
 
     if (!user) {
       return res.status(401).json({ error: '邮箱或密码错误' });
@@ -115,8 +116,8 @@ app.post('/api/auth/login', (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        displayName: user.display_name,
-        partnerId: user.partner_id
+        displayName: user.displayName,
+        partnerId: user.partnerId
       }
     });
   } catch (error) {
@@ -128,8 +129,7 @@ app.post('/api/auth/login', (req, res) => {
 // 获取用户信息
 app.get('/api/users/:userId', (req, res) => {
   try {
-    const user = db.prepare('SELECT id, email, display_name, partner_id FROM users WHERE id = ?')
-      .get(req.params.userId);
+    const user = db.get('users').find({ id: req.params.userId }).value();
 
     if (!user) {
       return res.status(404).json({ error: '用户不存在' });
@@ -138,8 +138,8 @@ app.get('/api/users/:userId', (req, res) => {
     res.json({
       id: user.id,
       email: user.email,
-      displayName: user.display_name,
-      partnerId: user.partner_id
+      displayName: user.displayName,
+      partnerId: user.partnerId
     });
   } catch (error) {
     console.error('获取用户错误:', error);
@@ -161,33 +161,33 @@ app.post('/api/pair-requests', (req, res) => {
     }
 
     // 检查是否已经发送过请求
-    const existingRequest = db.prepare(`
-      SELECT * FROM pair_requests
-      WHERE requester_id = ? AND target_email = ? AND status = 'pending'
-    `).get(requesterId, targetEmail);
+    const existingRequest = db.get('pairRequests')
+      .find({ requesterId, targetEmail, status: 'pending' }).value();
 
     if (existingRequest) {
       return res.status(400).json({ error: '配对请求待处理中' });
     }
 
     // 检查目标用户是否存在
-    const targetUser = db.prepare('SELECT id, partner_id FROM users WHERE email = ?').get(targetEmail);
+    const targetUser = db.get('users').find({ email: targetEmail }).value();
     if (!targetUser) {
       return res.status(404).json({ error: '目标用户不存在' });
     }
 
-    if (targetUser.partner_id) {
+    if (targetUser.partnerId) {
       return res.status(400).json({ error: '该用户已配对' });
     }
 
     // 创建配对请求
     const requestId = generateId();
-    const stmt = db.prepare(`
-      INSERT INTO pair_requests (id, requester_id, requester_email, target_email)
-      VALUES (?, ?, ?, ?)
-    `);
-
-    stmt.run(requestId, requesterId, requesterEmail, targetEmail);
+    db.get('pairRequests').push({
+      id: requestId,
+      requesterId,
+      requesterEmail,
+      targetEmail,
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    }).write();
 
     // 通知目标用户
     sendToUser(targetUser.id, {
@@ -208,11 +208,10 @@ app.get('/api/pair-requests', (req, res) => {
   try {
     const { email } = req.query;
 
-    const requests = db.prepare(`
-      SELECT * FROM pair_requests
-      WHERE target_email = ? AND status = 'pending'
-      ORDER BY created_at DESC
-    `).all(email);
+    const requests = db.get('pairRequests')
+      .filter({ targetEmail: email, status: 'pending' })
+      .orderBy(['createdAt'], ['desc'])
+      .value();
 
     res.json(requests);
   } catch (error) {
@@ -228,24 +227,26 @@ app.post('/api/pair-requests/:requestId/accept', (req, res) => {
     const { requestId } = req.params;
 
     // 获取配对请求
-    const request = db.prepare('SELECT * FROM pair_requests WHERE id = ?').get(requestId);
+    const request = db.get('pairRequests').find({ id: requestId }).value();
     if (!request) {
       return res.status(404).json({ error: '配对请求不存在' });
     }
 
-    if (request.target_email !== req.body.email) {
+    if (request.targetEmail !== req.body.email) {
       return res.status(403).json({ error: '无权接受此请求' });
     }
 
     // 更新用户配对状态
-    db.prepare('UPDATE users SET partner_id = ? WHERE id = ?').run(request.requester_id, userId);
-    db.prepare('UPDATE users SET partner_id = ? WHERE id = ?').run(userId, request.requester_id);
+    const requesterId = request.requesterId;
+
+    db.get('users').find({ id: userId }).assign({ partnerId: requesterId }).write();
+    db.get('users').find({ id: requesterId }).assign({ partnerId: userId }).write();
 
     // 更新配对请求状态
-    db.prepare('UPDATE pair_requests SET status = ? WHERE id = ?').run('accepted', requestId);
+    db.get('pairRequests').find({ id: requestId }).assign({ status: 'accepted' }).write();
 
     // 通知双方用户
-    sendToUsers([userId, request.requester_id], {
+    sendToUsers([userId, requesterId], {
       type: 'pair_accepted',
       partnerId: userId
     });
@@ -262,7 +263,7 @@ app.post('/api/pair-requests/:requestId/reject', (req, res) => {
   try {
     const { requestId } = req.params;
 
-    db.prepare('UPDATE pair_requests SET status = ? WHERE id = ?').run('rejected', requestId);
+    db.get('pairRequests').find({ id: requestId }).assign({ status: 'rejected' }).write();
 
     res.json({ success: true });
   } catch (error) {
@@ -282,27 +283,22 @@ app.post('/api/messages', (req, res) => {
 
     // 保存消息到数据库
     const messageId = generateId();
-    const stmt = db.prepare(`
-      INSERT INTO messages (id, content, sender_id, receiver_id)
-      VALUES (?, ?, ?, ?)
-    `);
-
-    stmt.run(messageId, content, senderId, receiverId);
+    db.get('messages').push({
+      id: messageId,
+      content,
+      senderId,
+      receiverId,
+      read: false,
+      createdAt: new Date().toISOString()
+    }).write();
 
     // 获取消息详情
-    const message = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+    const message = db.get('messages').find({ id: messageId }).value();
 
     // 实时推送给接收者
     sendToUser(receiverId, {
       type: 'new_message',
-      message: {
-        id: message.id,
-        content: message.content,
-        senderId: message.sender_id,
-        receiverId: message.receiver_id,
-        read: message.read,
-        createdAt: message.created_at
-      }
+      message
     });
 
     res.json({ success: true, messageId });
@@ -317,13 +313,14 @@ app.get('/api/messages', (req, res) => {
   try {
     const { userId, partnerId } = req.query;
 
-    const messages = db.prepare(`
-      SELECT * FROM messages
-      WHERE (sender_id = ? AND receiver_id = ?)
-         OR (sender_id = ? AND receiver_id = ?)
-      ORDER BY created_at ASC
-      LIMIT 100
-    `).all(userId, partnerId, partnerId, userId);
+    const messages = db.get('messages')
+      .filter(message =>
+        (message.senderId === userId && message.receiverId === partnerId) ||
+        (message.senderId === partnerId && message.receiverId === userId)
+      )
+      .orderBy(['createdAt'], ['asc'])
+      .take(100)
+      .value();
 
     res.json(messages);
   } catch (error) {
@@ -337,7 +334,7 @@ app.put('/api/messages/:messageId/read', (req, res) => {
   try {
     const { messageId } = req.params;
 
-    db.prepare('UPDATE messages SET read = 1 WHERE id = ?').run(messageId);
+    db.get('messages').find({ id: messageId }).assign({ read: true }).write();
 
     res.json({ success: true });
   } catch (error) {

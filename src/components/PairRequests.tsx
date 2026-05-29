@@ -4,19 +4,19 @@
 // 使用自建后端 API + WebSocket 实时更新
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { api, wsClient } from '@/lib/api';
 
 export default function PairRequests({
   currentUserId,
-  userEmail
+  userEmail,
+  onPairAccepted
 }: {
   currentUserId: string;
   userEmail: string;
+  onPairAccepted?: () => void;
 }) {
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const router = useRouter();
 
   // 加载配对请求
   useEffect(() => {
@@ -29,11 +29,11 @@ export default function PairRequests({
       const data = await api.getPairRequests(userEmail);
       const loadedRequests = data.map((req: any) => ({
         id: req.id,
-        requesterId: req.requester_id,
-        requesterEmail: req.requester_email,
-        targetEmail: req.target_email,
+        requesterId: req.requesterId,
+        requesterEmail: req.requesterEmail,
+        targetEmail: req.targetEmail,
         status: req.status,
-        createdAt: new Date(req.created_at),
+        createdAt: new Date(req.createdAt),
       }));
 
       setRequests(loadedRequests);
@@ -46,34 +46,45 @@ export default function PairRequests({
 
   // 设置 WebSocket 实时监听
   const setupWebSocket = () => {
-    wsClient.connect(currentUserId);
+    try {
+      wsClient.connect(currentUserId);
 
-    wsClient.onMessage((data) => {
-      if (data.type === 'new_pair_request') {
-        const newRequest = {
-          id: data.requestId,
-          requesterId: currentUserId,
-          requesterEmail: data.requesterEmail,
-          targetEmail: userEmail,
-          status: 'pending',
-          createdAt: new Date(),
-        };
+      wsClient.onMessage((data) => {
+        if (data.type === 'new_pair_request') {
+          const newRequest = {
+            id: data.requestId,
+            requesterId: currentUserId,
+            requesterEmail: data.requesterEmail,
+            targetEmail: userEmail,
+            status: 'pending',
+            createdAt: new Date(),
+          };
 
-        setRequests((prev) => [...prev, newRequest]);
-      } else if (data.type === 'pair_accepted') {
-        // 配对成功，刷新页面
-        alert('配对成功！即将跳转到聊天页面...');
-        setTimeout(() => {
-          router.refresh();
-        }, 1500);
-      }
-    });
+          setRequests((prev) => [...prev, newRequest]);
+        } else if (data.type === 'pair_accepted') {
+          // 配对成功
+          alert('配对成功！即将跳转到聊天页面...');
+          if (onPairAccepted) {
+            onPairAccepted();
+          }
+        }
+      });
+    } catch (error) {
+      console.error('设置实时监听失败:', error);
+    }
   };
 
   // 接受配对请求
   const handleAccept = async (requestId: string) => {
     try {
       await api.acceptPairRequest(requestId, currentUserId, userEmail);
+
+      alert('配对成功！即将跳转到聊天页面...');
+      if (onPairAccepted) {
+        setTimeout(() => {
+          onPairAccepted();
+        }, 1500);
+      }
     } catch (error: any) {
       console.error('接受配对请求失败:', error);
       alert('操作失败，请重试');

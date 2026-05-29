@@ -7,7 +7,15 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 
-export default function Pairing({ currentUserId, userEmail }: { currentUserId: string; userEmail: string }) {
+export default function Pairing({
+  currentUserId,
+  userEmail,
+  onPairRequestSent
+}: {
+  currentUserId: string;
+  userEmail: string;
+  onPairRequestSent?: () => void;
+}) {
   const [partnerEmail, setPartnerEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -33,6 +41,9 @@ export default function Pairing({ currentUserId, userEmail }: { currentUserId: s
       setPartnerEmail('');
       setLoading(false);
 
+      if (onPairRequestSent) {
+        onPairRequestSent();
+      }
     } catch (error: any) {
       console.error('发送配对请求失败:', error);
       setError(error.message || '发送失败，请重试');
@@ -49,7 +60,7 @@ export default function Pairing({ currentUserId, userEmail }: { currentUserId: s
             建立你们的专属空间
           </h1>
           <p className="text-gray-600 dark:text-gray-400">
-            输入您伴侣的邮箱，开始你们的甜蜜旅程
+            输入你伴侣的邮箱，开始你们的甜蜜旅程
           </p>
         </div>
 

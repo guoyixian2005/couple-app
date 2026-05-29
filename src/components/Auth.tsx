@@ -4,17 +4,15 @@
 // 使用自建后端 API
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 
-export default function Auth() {
+export default function Auth({ onLoginSuccess }: { onLoginSuccess?: () => void }) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [isLogin, setIsLogin] = useState(true);
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
-  const router = useRouter();
 
   const handleAuth = async () => {
     if (!email.trim()) {
@@ -47,7 +45,9 @@ export default function Auth() {
         localStorage.setItem('partnerId', response.user.partnerId || '');
 
         alert('登录成功！');
-        router.refresh();
+        if (onLoginSuccess) {
+          onLoginSuccess();
+        }
       } else {
         // 注册模式
         const response = await api.register(email.trim(), password, displayName.trim());
@@ -59,7 +59,9 @@ export default function Auth() {
         localStorage.setItem('partnerId', '');
 
         alert('注册成功！');
-        router.refresh();
+        if (onLoginSuccess) {
+          onLoginSuccess();
+        }
       }
 
       setLoading(false);
